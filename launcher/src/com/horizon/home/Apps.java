@@ -42,13 +42,13 @@ final class Apps {
     private static final Set<String> HIDDEN = new HashSet<>();
     /** Default order before the launcher has learned what you use. */
     static final String[] SEED = {
-            "com.nuvio.tv", "com.google.android.youtube.tv", "com.amazon.amazonvideo.livingroom",
+            "com.nuvio.app", "com.google.android.youtube.tv", "com.amazon.amazonvideo.livingroom",
             "in.startv.hotstar", "com.crunchyroll.crunchyroid", "com.stremio.one", "com.fancode.tv",
             "com.google.android.youtube.tvmusic", "com.nvidia.geforcenow", "com.redphx.betterxc",
             "net.gtvbox.videoplayer", "com.google.android.videos"};
 
     static {
-        String[] watch = {"com.nuvio.tv", "com.google.android.youtube.tv", "com.amazon.amazonvideo.livingroom",
+        String[] watch = {"com.nuvio.app", "com.google.android.youtube.tv", "com.amazon.amazonvideo.livingroom",
                 "in.startv.hotstar", "com.crunchyroll.crunchyroid", "com.fancode.tv", "com.stremio.one",
                 "com.google.android.videos", "com.ted.android.tv", "net.gtvbox.videoplayer", "com.netflix.ninja",
                 "com.graymatrix.did", "com.sonyliv", "com.jio.jioplay.tv", "com.disney.disneyplus",

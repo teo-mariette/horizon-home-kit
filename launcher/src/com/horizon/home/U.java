@@ -51,7 +51,7 @@ final class U {
     static final String MODE_SCENES = "scenes";
     static final String MODE_NUVIO = "nuvio";
 
-    static final String NUVIO = "com.nuvio.tv";
+    static final String NUVIO = "com.nuvio.app";
 
     private U() {}
 
