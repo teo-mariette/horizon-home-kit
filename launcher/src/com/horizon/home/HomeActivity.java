@@ -36,6 +36,7 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -89,8 +90,9 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
     private TextView sportsExtra;
     private Sports.Result sports;
     private long sportsAt;
-    /** Width of a game tile in Veil dp. 112 matches the Streaming services tiles exactly; 144 gives the bigger text room. */
-    private static final int SPORTS_TILE_W = 144;
+    private ScrollView homeScroll;
+    /** Width of a game tile in Veil dp. 112 is exactly the Streaming services tile width. */
+    private static final int SPORTS_TILE_W = 112;
     private TextView cwCount, cwTonight;
     private int defaultFocusId = View.NO_ID;
     private boolean firstFocusDone;
@@ -330,9 +332,20 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.BOTTOM);
         col.setClipChildren(false);
         col.setClipToPadding(false);
-        ui.addView(col, U.flp(U.MATCH, U.WRAP, Gravity.BOTTOM, 0, 0, 0, 0));
+        // The rows sit in a scroller that starts just under the top bar, so when there are more rows than
+        // the screen holds, the page scrolls instead of sliding up under the bar.
+        homeScroll = new ScrollView(this);
+        homeScroll.setVerticalScrollBarEnabled(false);
+        homeScroll.setFillViewport(true);
+        homeScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        homeScroll.setClipToPadding(false);
+        FrameLayout.LayoutParams scrollLp = new FrameLayout.LayoutParams(U.MATCH, U.MATCH);
+        scrollLp.topMargin = V.dp(26 + (EDGE - 48) / 2 + 34 + 6);
+        ui.addView(homeScroll, scrollLp);
+        homeScroll.addView(col, new FrameLayout.LayoutParams(U.MATCH, U.WRAP));
         col.setPadding(0, 0, 0, V.dp(22 + (EDGE - 48) / 2));
         buildHero(col);
         col.addView(space(24));
@@ -945,6 +958,7 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
     private void focusDefault() {
         if (defaultFocusId == View.NO_ID) return;
         final View v = findViewById(defaultFocusId);
+        if (homeScroll != null) homeScroll.smoothScrollTo(0, 0);
         if (v != null) v.post(() -> {
             v.requestFocus();
             ViewGroup p = (ViewGroup) v.getParent();
@@ -1122,16 +1136,18 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
         if (sportsRow == null) return;
         sportsRow.removeAllViews();
         int tw = V.dp(SPORTS_TILE_W), th = V.dp(63);   // 63 is the Streaming tiles' height; the width is SPORTS_TILE_W
-        if (sports == null) { addSportsNote(tw, th, "Loading games\u2026", ""); return; }
+        if (sports == null) { addSportsNote(tw, th, "Loading games\u2026", "", ""); return; }
         if (sports.matches.isEmpty()) {
             boolean failed = sports.total > 0 && sports.failed >= sports.total;
-            addSportsNote(tw, th, failed ? "Couldn't load games" : "No games soon", failed ? "Check the connection" : "Check back later");
+            addSportsNote(tw, th, failed ? "Couldn't load games" : "No games soon", failed ? "Focus for details" : "Check back later",
+                    failed ? "Couldn't reach the sports feed" + (TextUtils.isEmpty(sports.error) ? "" : " \u00b7 " + sports.error)
+                           : "Nothing live or starting in the next day for your leagues");
             return;
         }
         for (Sports.Match m : sports.matches) addMatchTile(m, tw, th);
     }
 
-    private void addSportsNote(int tw, int th, final String title, final String sub) {
+    private void addSportsNote(int tw, int th, final String title, final String sub, final String detail) {
         final FrameLayout t = new FrameLayout(this);
         t.setFocusable(true);
         t.setFocusableInTouchMode(true);
@@ -1142,8 +1158,9 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
         c.setOrientation(LinearLayout.VERTICAL);
         c.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
         c.setPadding(V.dp(10), 0, V.dp(8), 0);
-        TextView a = V.text(this, title, 11, 800, V.TEXT);
-        a.setSingleLine(true);
+        TextView a = V.text(this, title, 10, 800, V.TEXT);
+        a.setMaxLines(2);
+        a.setEllipsize(TextUtils.TruncateAt.END);
         c.addView(a, new LinearLayout.LayoutParams(-2, -2));
         if (!TextUtils.isEmpty(sub)) {
             TextView b = V.dim(V.text(this, sub, 8.5f, 500, V.TEXT), 0.7f);
@@ -1162,7 +1179,7 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
             t.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f)
                     .setDuration(170).setInterpolator(new DecelerateInterpolator()).start();
             ring.animate().alpha(has ? 1f : 0f).setDuration(150).start();
-            if (has) setHero("sports:note", "Live sports", title, null, TextUtils.isEmpty(sub) ? "Soccer \u00b7 American football \u00b7 Baseball" : sub, 0, null, null);
+            if (has) setHero("sports:note", "Live sports", title, null, TextUtils.isEmpty(detail) ? sub : detail, 0, null, null);
         });
         t.setOnClickListener(v -> openSportsApp());
         addToRow(sportsRow, t);
@@ -1198,15 +1215,15 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
     private View sportsTeamRow(String logo, String abbr, String score, boolean live) {
         LinearLayout r = U.row(this);
         r.setGravity(Gravity.CENTER_VERTICAL);
-        r.addView(sportsLogo(logo, abbr, 20), new LinearLayout.LayoutParams(V.dp(20), V.dp(20)));
-        TextView a = V.text(this, abbr, 12.5f, 800, V.TEXT);
+        r.addView(sportsLogo(logo, abbr, 15), new LinearLayout.LayoutParams(V.dp(15), V.dp(15)));
+        TextView a = V.text(this, abbr, 9.5f, 800, V.TEXT);
         a.setSingleLine(true);
         a.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams ap = lp(0, U.WRAP, 5, 0, 3, 0);
+        LinearLayout.LayoutParams ap = lp(0, U.WRAP, 4, 0, 2, 0);
         ap.weight = 1f;
         r.addView(a, ap);
         if (live && !TextUtils.isEmpty(score)) {
-            TextView s = V.text(this, score, 14, 800, V.TEXT);
+            TextView s = V.text(this, score, 10.5f, 800, V.TEXT);
             s.setSingleLine(true);
             r.addView(s);
         }
@@ -1225,7 +1242,8 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
         Calendar c = Calendar.getInstance();
         c.setTimeInMillis(m.startMs);
         if (DateFormat.is24HourFormat(this)) return m.leagueAbbr;
-        return (c.get(Calendar.HOUR_OF_DAY) < 12 ? "AM" : "PM") + " \u00b7 " + m.leagueAbbr;
+        String ap = c.get(Calendar.HOUR_OF_DAY) < 12 ? "AM" : "PM";
+        return m.leagueAbbr.length() <= 4 ? ap + " \u00b7 " + m.leagueAbbr : ap;
     }
 
     /** The big number for a live game: the clock (soccer), the quarter (football) or the inning (baseball). */
@@ -1285,42 +1303,42 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.HORIZONTAL);
         c.setGravity(Gravity.CENTER_VERTICAL);
-        c.setPadding(V.dp(8), V.dp(4), V.dp(8), V.dp(4));
+        c.setPadding(V.dp(6), V.dp(4), V.dp(6), V.dp(4));
 
         // left: sport picture + LIVE or the day, the big clock or start time, then league (or the clock under a live football quarter)
         LinearLayout left = U.col(this);
         left.setGravity(Gravity.CENTER_HORIZONTAL);
-        TextView top = V.text(this, Sports.emoji(m.sport) + " " + (live ? "LIVE" : dayShort(m.startMs)), 9, 800,
+        TextView top = V.text(this, Sports.emoji(m.sport) + " " + (live ? "LIVE" : dayShort(m.startMs)), 7, 800,
                 live ? 0xFFFF6B6B : U.alpha(V.TEXT, 0.88f));
         top.setSingleLine(true);
         top.setGravity(Gravity.CENTER);
         left.addView(top, new LinearLayout.LayoutParams(U.MATCH, U.WRAP));
         String big = live ? liveBig(m) : timeBig(m.startMs);
-        TextView clock = V.text(this, big, big.length() <= 3 ? 20 : big.length() <= 5 ? 16 : 11, 800, V.TEXT);
+        TextView clock = V.text(this, big, big.length() <= 3 ? 16 : big.length() <= 4 ? 15 : big.length() <= 5 ? 12 : 10, 800, V.TEXT);
         clock.setSingleLine(true);
         clock.setEllipsize(TextUtils.TruncateAt.END);
         clock.setGravity(Gravity.CENTER);
         left.addView(clock, new LinearLayout.LayoutParams(U.MATCH, U.WRAP));
-        TextView low = V.dim(V.text(this, live ? liveSmall(m) : timeSmall(m), 8.5f, 700, V.TEXT), 0.8f);
+        TextView low = V.dim(V.text(this, live ? liveSmall(m) : timeSmall(m), 7, 700, V.TEXT), 0.8f);
         low.setSingleLine(true);
         low.setEllipsize(TextUtils.TruncateAt.END);
         low.setGravity(Gravity.CENTER);
         left.addView(low, new LinearLayout.LayoutParams(U.MATCH, U.WRAP));
-        c.addView(left, new LinearLayout.LayoutParams(V.dp(44), U.WRAP));
+        c.addView(left, new LinearLayout.LayoutParams(V.dp(38), U.WRAP));
 
         View divider = new View(this);
         divider.setBackgroundColor(0x33FFFFFF);
-        c.addView(divider, lp(Math.max(1, V.dp(0.7f)) , V.dp(40), 7, 0, 0, 0));
+        c.addView(divider, lp(Math.max(1, V.dp(0.7f)), V.dp(38), 4, 0, 0, 0));
 
         // right: the two teams (soccer lists home first, US sports list away first)
         boolean hf = m.homeFirst();
         LinearLayout right = U.col(this);
         right.setGravity(Gravity.CENTER_VERTICAL);
         right.addView(sportsTeamRow(hf ? m.homeLogo : m.awayLogo, hf ? m.homeAbbr : m.awayAbbr, hf ? m.homeScore : m.awayScore, live),
-                new LinearLayout.LayoutParams(U.MATCH, V.dp(24)));
+                new LinearLayout.LayoutParams(U.MATCH, V.dp(22)));
         right.addView(sportsTeamRow(hf ? m.awayLogo : m.homeLogo, hf ? m.awayAbbr : m.homeAbbr, hf ? m.awayScore : m.homeScore, live),
-                lp(U.MATCH, V.dp(24), 0, 3, 0, 0));
-        LinearLayout.LayoutParams rp = lp(0, U.WRAP, 8, 0, 0, 0);
+                lp(U.MATCH, V.dp(22), 0, 2, 0, 0));
+        LinearLayout.LayoutParams rp = lp(0, U.WRAP, 5, 0, 0, 0);
         rp.weight = 1f;
         c.addView(right, rp);
 

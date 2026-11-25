@@ -104,6 +104,7 @@ final class Sports {
     static final class Result {
         final List<Match> matches = new ArrayList<>();
         int total, failed;
+        String error = "";   // the first failure, shown on screen when nothing loads
     }
 
     private Sports() {}
@@ -152,7 +153,14 @@ final class Sports {
             jobs.add(pool.submit(new Callable<List<Match>>() {
                 @Override public List<Match> call() throws Exception {
                     List<Match> out = new ArrayList<>();
-                    parse(lg, order, Http.get(API + lg.path + "/scoreboard?dates=" + range + "&limit=100"), now, out);
+                    String url = API + lg.path + "/scoreboard";
+                    String body;
+                    try {
+                        body = Http.get(url + "?dates=" + range + "&limit=100");
+                    } catch (Exception first) {
+                        body = Http.get(url);   // today's slate, in case the date range wasn't accepted
+                    }
+                    parse(lg, order, body, now, out);
                     return out;
                 }
             }));
@@ -162,6 +170,7 @@ final class Sports {
                 r.matches.addAll(job.get());
             } catch (Throwable t) {
                 r.failed++;
+                if (r.error.isEmpty()) r.error = describe(t);
             }
         }
         pool.shutdown();
@@ -224,6 +233,12 @@ final class Sports {
             if (!"in".equals(state)) { m.homeScore = ""; m.awayScore = ""; }
             out.add(m);
         }
+    }
+
+    private static String describe(Throwable t) {
+        Throwable x = t.getCause() != null ? t.getCause() : t;
+        String s = x.getClass().getSimpleName() + (x.getMessage() == null ? "" : ": " + x.getMessage());
+        return s.length() > 90 ? s.substring(0, 90) : s;
     }
 
     private static void fill(Match m, JSONObject c, boolean isHome) {
