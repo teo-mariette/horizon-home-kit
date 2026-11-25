@@ -85,7 +85,12 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
     private int heroToken;
 
     // rows
-    private LinearLayout cwBlock, cwRow, svcRow, appsRow;
+    private LinearLayout cwBlock, cwRow, svcRow, appsRow, sportsRow;
+    private TextView sportsExtra;
+    private Sports.Result sports;
+    private long sportsAt;
+    /** Width of a game tile in Veil dp. 112 matches the Streaming services tiles exactly; 144 gives the bigger text room. */
+    private static final int SPORTS_TILE_W = 144;
     private TextView cwCount, cwTonight;
     private int defaultFocusId = View.NO_ID;
     private boolean firstFocusDone;
@@ -162,6 +167,7 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
         super.onResume();
         lastInput = System.currentTimeMillis();
         if (System.currentTimeMillis() - nuvioAt > 45000) loadNuvio();
+        if (System.currentTimeMillis() - sportsAt > 120000) loadSports();
     }
 
     @Override protected void onStop() {
@@ -239,6 +245,8 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
         } else if (U.P_HERO_FILL.equals(key) || "tmdb_key".equals(key)) {
             loadNuvio();
             fillRows();
+        } else if (Sports.PREF.equals(key)) {
+            loadSports();
         } else if (key.startsWith("cat_") || key.startsWith("hide_") || key.startsWith("pin_")) {
             loadApps();
         }
@@ -257,6 +265,10 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
         if (tk != null) U.prefs(this).edit().putString("tmdb_key", tk.trim()).apply();
         String nm = i.getStringExtra("name");
         if (nm != null) U.prefs(this).edit().putString(U.P_NAME, nm.trim()).apply();
+        String sp = i.getStringExtra("sports");   // leagues for the Live sports row, e.g. epl,ucl,nfl,mlb
+        if (sp != null) U.prefs(this).edit().putString(Sports.PREF, sp.trim()).apply();
+        String spk = i.getStringExtra("sports_pkg");   // package id of your sports app, only if it isn't found by name
+        if (spk != null) U.prefs(this).edit().putString("sports_pkg", spk.trim()).apply();
         String lt = i.getStringExtra("livetv");   // your Live TV addon link (without /manifest.json)
         if (lt != null) U.prefs(this).edit().putString(GuideActivity.P_SRC, lt.trim().replaceAll("/manifest\\.json$", "")).apply();
     }
@@ -326,6 +338,7 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
         col.addView(space(24));
         buildContinue(col);
         buildServices(col);
+        buildSports(col);
         col.addView(space(14));
         buildApps(col);
         showGreeting();
@@ -918,6 +931,7 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
         boolean hadFocus = getCurrentFocus() != null && ui.hasFocus();
         fillContinue();
         fillServices();
+        fillSports();
         fillApps();
         defaultFocusId = cwRow.getChildCount() > 0 ? cwRow.getChildAt(0).getId()
                 : svcRow.getChildCount() > 0 ? svcRow.getChildAt(0).getId()
@@ -1078,6 +1092,274 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
             t.setOnClickListener(v -> openService(sv.key));
             addToRow(svcRow, t);
         }
+    }
+
+    // --- live sports (games from ESPN's public feed; a tap opens your sports app)
+
+    private void buildSports(LinearLayout col) {
+        LinearLayout block = U.col(this);
+        sportsExtra = header(block, "Live sports");
+        sportsExtra.setText("on SportzX");
+        sportsRow = row(block, 12);
+        col.addView(block, new LinearLayout.LayoutParams(U.MATCH, U.WRAP));
+    }
+
+    private void loadSports() {
+        sportsAt = System.currentTimeMillis();
+        U.IO.execute(() -> {
+            final Sports.Result r = Sports.load(getApplicationContext());
+            U.MAIN.post(() -> {
+                sports = r;
+                View f = getCurrentFocus();
+                boolean onRow = f != null && f.getParent() == sportsRow;
+                fillSports();
+                if (onRow && sportsRow != null && sportsRow.getChildCount() > 0) sportsRow.getChildAt(0).requestFocus();
+            });
+        });
+    }
+
+    private void fillSports() {
+        if (sportsRow == null) return;
+        sportsRow.removeAllViews();
+        int tw = V.dp(SPORTS_TILE_W), th = V.dp(63);   // 63 is the Streaming tiles' height; the width is SPORTS_TILE_W
+        if (sports == null) { addSportsNote(tw, th, "Loading games\u2026", ""); return; }
+        if (sports.matches.isEmpty()) {
+            boolean failed = sports.total > 0 && sports.failed >= sports.total;
+            addSportsNote(tw, th, failed ? "Couldn't load games" : "No games soon", failed ? "Check the connection" : "Check back later");
+            return;
+        }
+        for (Sports.Match m : sports.matches) addMatchTile(m, tw, th);
+    }
+
+    private void addSportsNote(int tw, int th, final String title, final String sub) {
+        final FrameLayout t = new FrameLayout(this);
+        t.setFocusable(true);
+        t.setFocusableInTouchMode(true);
+        t.setLayoutParams(new LinearLayout.LayoutParams(tw, th));
+        V.round(t, 12);
+        t.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[] {0xFF1B2A22, 0xFF08090C}));
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        c.setPadding(V.dp(10), 0, V.dp(8), 0);
+        TextView a = V.text(this, title, 11, 800, V.TEXT);
+        a.setSingleLine(true);
+        c.addView(a, new LinearLayout.LayoutParams(-2, -2));
+        if (!TextUtils.isEmpty(sub)) {
+            TextView b = V.dim(V.text(this, sub, 8.5f, 500, V.TEXT), 0.7f);
+            b.setSingleLine(true);
+            c.addView(b, lp(-2, -2, 0, 2, 0, 0));
+        }
+        t.addView(c, new FrameLayout.LayoutParams(tw, th, Gravity.CENTER));
+        final View ring = new View(this);
+        GradientDrawable rg = V.shape(0, 11, 0);
+        rg.setStroke(V.dp(2), V.TEXT);
+        ring.setBackground(new android.graphics.drawable.InsetDrawable(rg, V.dp(1)));
+        ring.setAlpha(0f);
+        t.addView(ring, new FrameLayout.LayoutParams(-1, -1));
+        t.setContentDescription(title);
+        t.setOnFocusChangeListener((v, has) -> {
+            t.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f)
+                    .setDuration(170).setInterpolator(new DecelerateInterpolator()).start();
+            ring.animate().alpha(has ? 1f : 0f).setDuration(150).start();
+            if (has) setHero("sports:note", "Live sports", title, null, TextUtils.isEmpty(sub) ? "Soccer \u00b7 American football \u00b7 Baseball" : sub, 0, null, null);
+        });
+        t.setOnClickListener(v -> openSportsApp());
+        addToRow(sportsRow, t);
+    }
+
+    /** A team logo from the feed (dark-background version first). If none loads, the team's letter code shows instead. */
+    private View sportsLogo(final String url, String abbr, float units) {
+        final FrameLayout f = new FrameLayout(this);
+        f.setBackground(V.shape(0x29FFFFFF, units / 2f, 0));
+        final TextView tv = V.text(this, abbr == null ? "" : abbr, units * 0.34f, 800, V.TEXT);
+        tv.setGravity(Gravity.CENTER);
+        tv.setSingleLine(true);
+        f.addView(tv, new FrameLayout.LayoutParams(U.MATCH, U.WRAP, Gravity.CENTER));
+        final ImageView iv = V.image(this, ImageView.ScaleType.FIT_CENTER);
+        f.addView(iv, new FrameLayout.LayoutParams(U.MATCH, U.MATCH));
+        final int px = V.dp(units * 2.4f);
+        final Img.Cb show = b -> {
+            if (b == null) return;
+            iv.setImageBitmap(b);
+            tv.setVisibility(View.GONE);
+            f.setBackground(null);
+        };
+        final String dark = url != null && url.contains("/500/") ? url.replace("/500/", "/500-dark/") : null;
+        if (dark != null) {
+            Img.load(this, dark, px, b -> { if (b != null) show.done(b); else Img.load(this, url, px, show); });
+        } else {
+            Img.load(this, url, px, show);
+        }
+        return f;
+    }
+
+    /** One team in a tile: logo, letter code, and the score while the game is live. */
+    private View sportsTeamRow(String logo, String abbr, String score, boolean live) {
+        LinearLayout r = U.row(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        r.addView(sportsLogo(logo, abbr, 20), new LinearLayout.LayoutParams(V.dp(20), V.dp(20)));
+        TextView a = V.text(this, abbr, 12.5f, 800, V.TEXT);
+        a.setSingleLine(true);
+        a.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams ap = lp(0, U.WRAP, 5, 0, 3, 0);
+        ap.weight = 1f;
+        r.addView(a, ap);
+        if (live && !TextUtils.isEmpty(score)) {
+            TextView s = V.text(this, score, 14, 800, V.TEXT);
+            s.setSingleLine(true);
+            r.addView(s);
+        }
+        return r;
+    }
+
+    private String timeBig(long ms) {
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(ms);
+        int h = c.get(Calendar.HOUR_OF_DAY);
+        if (!DateFormat.is24HourFormat(this)) { h = h % 12; if (h == 0) h = 12; }
+        return h + ":" + String.format(Locale.US, "%02d", c.get(Calendar.MINUTE));
+    }
+
+    private String timeSmall(Sports.Match m) {
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(m.startMs);
+        if (DateFormat.is24HourFormat(this)) return m.leagueAbbr;
+        return (c.get(Calendar.HOUR_OF_DAY) < 12 ? "AM" : "PM") + " \u00b7 " + m.leagueAbbr;
+    }
+
+    /** The big number for a live game: the clock (soccer), the quarter (football) or the inning (baseball). */
+    private String liveBig(Sports.Match m) {
+        String d = m.detail == null ? "" : m.detail.trim();
+        if (d.isEmpty()) return "LIVE";
+        if (Sports.SOCCER.equals(m.sport)) return d;
+        int dash = d.indexOf(" - ");
+        if (dash > 0) return d.substring(dash + 3).trim();
+        if (d.startsWith("Top ") || d.startsWith("Bot ") || d.startsWith("Mid ") || d.startsWith("End "))
+            return d.substring(0, 1) + d.substring(4).replaceAll("[^0-9]", "");
+        return d;
+    }
+
+    private String liveSmall(Sports.Match m) {
+        String d = m.detail == null ? "" : m.detail.trim();
+        int dash = d.indexOf(" - ");
+        if (!Sports.SOCCER.equals(m.sport) && dash > 0) return d.substring(0, dash).trim();
+        return m.leagueAbbr;
+    }
+
+    private String dayLabel(long ms) {
+        Calendar now = Calendar.getInstance(), c = Calendar.getInstance();
+        c.setTimeInMillis(ms);
+        int d = (c.get(Calendar.YEAR) - now.get(Calendar.YEAR)) * 366 + (c.get(Calendar.DAY_OF_YEAR) - now.get(Calendar.DAY_OF_YEAR));
+        if (d == 0) return "Today";
+        if (d == 1) return "Tomorrow";
+        if (d == -1) return "Yesterday";
+        return DateFormat.format("EEE", c).toString();
+    }
+
+    private String whenText(Sports.Match m) {
+        if (m.live()) return "\u25cf LIVE" + (TextUtils.isEmpty(m.detail) ? "" : " " + m.detail);
+        return dayLabel(m.startMs) + " " + DateFormat.getTimeFormat(this).format(new Date(m.startMs));
+    }
+
+    /** "Today", otherwise the weekday (Wed). Short enough for the tile's left column. */
+    private String dayShort(long ms) {
+        String d = dayLabel(ms);
+        if ("Today".equals(d)) return d;
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(ms);
+        return DateFormat.format("EEE", c).toString();
+    }
+
+    /** Option D: sport and big clock or start time on the left, the two teams (logo, code, score) stacked on the right. */
+    private void addMatchTile(final Sports.Match m, int tw, int th) {
+        final FrameLayout t = new FrameLayout(this);
+        t.setFocusable(true);
+        t.setFocusableInTouchMode(true);
+        t.setLayoutParams(new LinearLayout.LayoutParams(tw, th));
+        V.round(t, 12);
+        t.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[] {U.mix(Sports.color(m.sport), 0xFF000000, 0.4f), 0xFF08090C}));
+
+        final boolean live = m.live();
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.HORIZONTAL);
+        c.setGravity(Gravity.CENTER_VERTICAL);
+        c.setPadding(V.dp(8), V.dp(4), V.dp(8), V.dp(4));
+
+        // left: sport picture + LIVE or the day, the big clock or start time, then league (or the clock under a live football quarter)
+        LinearLayout left = U.col(this);
+        left.setGravity(Gravity.CENTER_HORIZONTAL);
+        TextView top = V.text(this, Sports.emoji(m.sport) + " " + (live ? "LIVE" : dayShort(m.startMs)), 9, 800,
+                live ? 0xFFFF6B6B : U.alpha(V.TEXT, 0.88f));
+        top.setSingleLine(true);
+        top.setGravity(Gravity.CENTER);
+        left.addView(top, new LinearLayout.LayoutParams(U.MATCH, U.WRAP));
+        String big = live ? liveBig(m) : timeBig(m.startMs);
+        TextView clock = V.text(this, big, big.length() <= 3 ? 20 : big.length() <= 5 ? 16 : 11, 800, V.TEXT);
+        clock.setSingleLine(true);
+        clock.setEllipsize(TextUtils.TruncateAt.END);
+        clock.setGravity(Gravity.CENTER);
+        left.addView(clock, new LinearLayout.LayoutParams(U.MATCH, U.WRAP));
+        TextView low = V.dim(V.text(this, live ? liveSmall(m) : timeSmall(m), 8.5f, 700, V.TEXT), 0.8f);
+        low.setSingleLine(true);
+        low.setEllipsize(TextUtils.TruncateAt.END);
+        low.setGravity(Gravity.CENTER);
+        left.addView(low, new LinearLayout.LayoutParams(U.MATCH, U.WRAP));
+        c.addView(left, new LinearLayout.LayoutParams(V.dp(44), U.WRAP));
+
+        View divider = new View(this);
+        divider.setBackgroundColor(0x33FFFFFF);
+        c.addView(divider, lp(Math.max(1, V.dp(0.7f)) , V.dp(40), 7, 0, 0, 0));
+
+        // right: the two teams (soccer lists home first, US sports list away first)
+        boolean hf = m.homeFirst();
+        LinearLayout right = U.col(this);
+        right.setGravity(Gravity.CENTER_VERTICAL);
+        right.addView(sportsTeamRow(hf ? m.homeLogo : m.awayLogo, hf ? m.homeAbbr : m.awayAbbr, hf ? m.homeScore : m.awayScore, live),
+                new LinearLayout.LayoutParams(U.MATCH, V.dp(24)));
+        right.addView(sportsTeamRow(hf ? m.awayLogo : m.homeLogo, hf ? m.awayAbbr : m.homeAbbr, hf ? m.awayScore : m.homeScore, live),
+                lp(U.MATCH, V.dp(24), 0, 3, 0, 0));
+        LinearLayout.LayoutParams rp = lp(0, U.WRAP, 8, 0, 0, 0);
+        rp.weight = 1f;
+        c.addView(right, rp);
+
+        t.addView(c, new FrameLayout.LayoutParams(tw, th));
+        final View ring = new View(this);
+        GradientDrawable rg = V.shape(0, 11, 0);
+        rg.setStroke(V.dp(2), V.TEXT);
+        ring.setBackground(new android.graphics.drawable.InsetDrawable(rg, V.dp(1)));
+        ring.setAlpha(0f);
+        t.addView(ring, new FrameLayout.LayoutParams(-1, -1));
+        t.setContentDescription(m.title() + ", " + whenText(m));
+        t.setOnFocusChangeListener((v, has) -> {
+            t.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f)
+                    .setDuration(170).setInterpolator(new DecelerateInterpolator()).start();
+            ring.animate().alpha(has ? 1f : 0f).setDuration(150).start();
+            if (has) showMatch(m);
+        });
+        t.setOnClickListener(v -> openSportsApp());
+        addToRow(sportsRow, t);
+    }
+
+    /** The hero text follows the focused game: teams, league, time, score, venue and channel. */
+    private void showMatch(Sports.Match m) {
+        StringBuilder line = new StringBuilder(m.leagueName);
+        line.append(" \u00b7 ").append(m.live() ? (TextUtils.isEmpty(m.detail) ? "Live" : "Live \u00b7 " + m.detail)
+                : dayLabel(m.startMs) + " " + DateFormat.getTimeFormat(this).format(new Date(m.startMs)));
+        if (m.live() && !TextUtils.isEmpty(m.score())) line.append(" \u00b7 ").append(m.score());
+        if (!TextUtils.isEmpty(m.venue)) line.append(" \u00b7 ").append(m.venue);
+        if (!TextUtils.isEmpty(m.broadcast)) line.append(" \u00b7 ").append(m.broadcast);
+        setHero("sports:" + m.id, (m.live() ? "Live now \u00b7 " : "Coming up \u00b7 ") + m.sport, m.title(), null, line.toString(), 0, null, null);
+    }
+
+    private void openSportsApp() {
+        String pkg = prefs.getString("sports_pkg", "");
+        if (!TextUtils.isEmpty(pkg)) { Apps.launchPackage(this, pkg); return; }
+        for (Apps.App a : apps) {
+            if (a.label != null && a.label.toLowerCase(Locale.ROOT).replace(" ", "").contains("sportzx")) { Apps.launch(this, a); return; }
+        }
+        Toast.makeText(this, "SportzX wasn't found on this TV", Toast.LENGTH_LONG).show();
     }
 
     private void addLiveTile(int tw, int th) {
