@@ -11,6 +11,12 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
+import android.graphics.RadialGradient;
+import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.drawable.AnimatedImageDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -806,6 +812,10 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
             if (token != heroToken) return;
             heroLabel.setText(label);
             heroLabel.setTextColor(V.accent());
+            boolean sportsHero = key instanceof String && ((String) key).startsWith("sports:");
+            heroTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, V.dpf(sportsHero ? 36 : 44));
+            if (sportsHero) { heroLine.setSingleLine(false); heroLine.setMaxLines(2); heroLine.setEllipsize(TextUtils.TruncateAt.END); }
+            else V.ellipsize(heroLine);
             heroTitle.setText(title);
             heroTitle.setVisibility(View.VISIBLE);
             heroLogo.setVisibility(View.GONE);
@@ -1135,6 +1145,9 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
     private void fillSports() {
         if (sportsRow == null) return;
         sportsRow.removeAllViews();
+        if (sportsExtra != null && sports != null) {
+            sportsExtra.setText("on SportzX \u00b7 " + sports.matches.size() + " games \u00b7 " + (sports.total - sports.failed) + "/" + sports.total + " feeds");
+        }
         int tw = V.dp(SPORTS_TILE_W), th = V.dp(63);   // 63 is the Streaming tiles' height; the width is SPORTS_TILE_W
         if (sports == null) { addSportsNote(tw, th, "Loading games\u2026", "", ""); return; }
         if (sports.matches.isEmpty()) {
@@ -1360,19 +1373,88 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
         addToRow(sportsRow, t);
     }
 
-    /** The hero text follows the focused game: teams, league, time, score, venue and channel. */
+    /** The hero text follows the focused game. Line 1: league, when, score. Line 2: venue and channel. */
     private void showMatch(Sports.Match m) {
-        StringBuilder line = new StringBuilder(m.leagueName);
-        line.append(" \u00b7 ").append(m.live() ? (TextUtils.isEmpty(m.detail) ? "Live" : "Live \u00b7 " + m.detail)
-                : dayLabel(m.startMs) + " " + DateFormat.getTimeFormat(this).format(new Date(m.startMs)));
-        if (m.live() && !TextUtils.isEmpty(m.score())) line.append(" \u00b7 ").append(m.score());
-        if (!TextUtils.isEmpty(m.venue)) line.append(" \u00b7 ").append(m.venue);
-        if (!TextUtils.isEmpty(m.broadcast)) line.append(" \u00b7 ").append(m.broadcast);
-        setHero("sports:" + m.id, (m.live() ? "Live now \u00b7 " : "Coming up \u00b7 ") + m.sport, m.title(), null, line.toString(), 0, null, null);
+        StringBuilder l1 = new StringBuilder(m.leagueName).append(" \u00b7 ");
+        if (m.live()) {
+            l1.append("LIVE");
+            if (!TextUtils.isEmpty(m.detail)) l1.append(" ").append(m.detail);
+            if (!TextUtils.isEmpty(m.score())) l1.append(" \u00b7 ").append(m.score());
+        } else {
+            l1.append(dayLabel(m.startMs)).append(" ").append(DateFormat.getTimeFormat(this).format(new Date(m.startMs)));
+        }
+        StringBuilder l2 = new StringBuilder();
+        if (!TextUtils.isEmpty(m.venue)) l2.append(m.venue);
+        if (!TextUtils.isEmpty(m.broadcast)) l2.append(l2.length() > 0 ? " \u00b7 " : "").append("on ").append(m.broadcast);
+        String line = l2.length() > 0 ? l1 + "\n" + l2 : l1.toString();
+        String key = "sports:" + m.id;
+        setHero(key, (m.live() ? "Live now \u00b7 " : "Coming up \u00b7 ") + m.sport, m.title(), null, line, 0, null, null);
+        matchBackdrop(m, key);
+    }
+
+    /** The wall behind the focused game: each team's colour comes in from its own side, with both logos large on the right. */
+    private void matchBackdrop(final Sports.Match m, final String key) {
+        if (wall == null) return;
+        final boolean hf = m.homeFirst();
+        final String leftUrl = hf ? m.homeLogo : m.awayLogo, rightUrl = hf ? m.awayLogo : m.homeLogo;
+        final int fallback = Sports.color(m.sport);
+        final int leftCol = (hf ? m.homeColor : m.awayColor) != 0 ? (hf ? m.homeColor : m.awayColor) : fallback;
+        final int rightCol = (hf ? m.awayColor : m.homeColor) != 0 ? (hf ? m.awayColor : m.homeColor) : fallback;
+        // Like the other backdrops, only change once focus has rested on the tile.
+        U.MAIN.postDelayed(() -> {
+            if (!key.equals(heroKey) || wall == null) return;
+            final Bitmap[] logos = new Bitmap[2];
+            final int[] waiting = {2};
+            final Runnable compose = () -> U.IO.execute(() -> {
+                final Bitmap bm = drawMatchWall(logos[0], logos[1], leftCol, rightCol);
+                final Integer accent = ArtColor.extract(bm);
+                U.MAIN.post(() -> {
+                    if (!key.equals(heroKey) || wall == null) return;
+                    wall.show(bm);
+                    if (root.getBackground() != null) root.setBackground(null);
+                    if (artMode() && prefs.getBoolean("art_colours", true)) {
+                        U.MAIN.postDelayed(() -> { if (key.equals(heroKey)) setAccent(accent); }, 750);
+                    }
+                });
+            });
+            if (TextUtils.isEmpty(leftUrl)) waiting[0]--; else Img.load(this, leftUrl, 480, b -> { logos[0] = b; if (--waiting[0] == 0) compose.run(); });
+            if (TextUtils.isEmpty(rightUrl)) waiting[0]--; else Img.load(this, rightUrl, 480, b -> { logos[1] = b; if (--waiting[0] == 0) compose.run(); });
+            if (waiting[0] == 0) compose.run();
+        }, 450);
+    }
+
+    private Bitmap drawMatchWall(Bitmap left, Bitmap right, int leftCol, int rightCol) {
+        final int w = WALL_W, h = WALL_W * 9 / 16;
+        Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas cv = new Canvas(bm);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setFilterBitmap(true);
+        cv.drawColor(0xFF06080B);
+        p.setShader(new LinearGradient(0, 0, w * 0.8f, 0, U.mix(leftCol, 0xFF000000, 0.4f), leftCol & 0x00FFFFFF, Shader.TileMode.CLAMP));
+        cv.drawRect(0, 0, w, h, p);
+        p.setShader(new LinearGradient(w, 0, w * 0.2f, 0, U.mix(rightCol, 0xFF000000, 0.4f), rightCol & 0x00FFFFFF, Shader.TileMode.CLAMP));
+        cv.drawRect(0, 0, w, h, p);
+        p.setShader(null);
+        float size = h * 0.5f;
+        drawWallLogo(cv, p, left, w * 0.60f, h * 0.40f, size, leftCol);
+        drawWallLogo(cv, p, right, w * 0.84f, h * 0.40f, size, rightCol);
+        return bm;
+    }
+
+    private void drawWallLogo(Canvas cv, Paint p, Bitmap logo, float cx, float cy, float size, int col) {
+        p.setShader(new RadialGradient(cx, cy, size * 0.95f, (col & 0x00FFFFFF) | 0x73000000, col & 0x00FFFFFF, Shader.TileMode.CLAMP));
+        cv.drawCircle(cx, cy, size * 0.95f, p);
+        p.setShader(null);
+        if (logo == null || logo.getWidth() == 0 || logo.getHeight() == 0) return;
+        float s = Math.min(size / logo.getWidth(), size / logo.getHeight());
+        float lw = logo.getWidth() * s, lh = logo.getHeight() * s;
+        p.setAlpha(235);
+        cv.drawBitmap(logo, null, new RectF(cx - lw / 2, cy - lh / 2, cx + lw / 2, cy + lh / 2), p);
+        p.setAlpha(255);
     }
 
     private void openSportsApp() {
-        String pkg = prefs.getString("sports_pkg", "");
+        String pkg = prefs.getString("sports_pkg", "com.sportzx.live");
         if (!TextUtils.isEmpty(pkg)) { Apps.launchPackage(this, pkg); return; }
         for (Apps.App a : apps) {
             if (a.label != null && a.label.toLowerCase(Locale.ROOT).replace(" ", "").contains("sportzx")) { Apps.launch(this, a); return; }

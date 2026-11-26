@@ -11,8 +11,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.TimeZone;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -32,8 +34,8 @@ final class Sports {
             + "nfl,mlb";
     static final String SOCCER = "Soccer", FOOTBALL = "American Football", BASEBALL = "Baseball";
 
-    /** Show games that start within this many hours (live games always show). */
-    static final long LOOKAHEAD_MS = 30L * 3600 * 1000;
+    /** Show games that start within the next 24 hours (live games always show). */
+    static final long LOOKAHEAD_MS = 24L * 3600 * 1000;
     /** Most tiles in the row. */
     static final int MAX_TILES = 30;
 
@@ -87,6 +89,7 @@ final class Sports {
         long startMs;
         String homeName = "", homeAbbr = "", homeLogo = "", homeScore = "";
         String awayName = "", awayAbbr = "", awayLogo = "", awayScore = "";
+        int homeColor, awayColor;      // team colours from the feed, 0 when unknown
         int order;                     // position of the league in your list
 
         boolean live() { return "in".equals(state); }
@@ -103,8 +106,13 @@ final class Sports {
 
     static final class Result {
         final List<Match> matches = new ArrayList<>();
-        int total, failed;
-        String error = "";   // the first failure, shown on screen when nothing loads
+        int total, failed, seen;       // leagues asked, leagues that failed, games the feeds listed before filtering
+        String error = "";             // the first failure, shown on screen when nothing loads
+    }
+
+    private static final class Batch {
+        final List<Match> matches = new ArrayList<>();
+        int seen;
     }
 
     private Sports() {}
@@ -143,31 +151,28 @@ final class Sports {
         r.total = leagues.size();
         final long now = System.currentTimeMillis();
         SimpleDateFormat df = new SimpleDateFormat("yyyyMMdd", Locale.US);
-        final String range = df.format(new Date(now - 24L * 3600 * 1000)) + "-" + df.format(new Date(now + 24L * 3600 * 1000));
+        final String yesterday = df.format(new Date(now - 24L * 3600 * 1000));
+        final String today = df.format(new Date(now));
+        final String tomorrow = df.format(new Date(now + 24L * 3600 * 1000));
+        final String range = yesterday + "-" + tomorrow;
+        final String[] days = {yesterday, today, tomorrow};
 
         ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, Math.min(6, leagues.size())));
-        List<Future<List<Match>>> jobs = new ArrayList<>();
+        List<Future<Batch>> jobs = new ArrayList<>();
         for (int i = 0; i < leagues.size(); i++) {
             final League lg = leagues.get(i);
             final int order = i;
-            jobs.add(pool.submit(new Callable<List<Match>>() {
-                @Override public List<Match> call() throws Exception {
-                    List<Match> out = new ArrayList<>();
-                    String url = API + lg.path + "/scoreboard";
-                    String body;
-                    try {
-                        body = Http.get(url + "?dates=" + range + "&limit=100");
-                    } catch (Exception first) {
-                        body = Http.get(url);   // today's slate, in case the date range wasn't accepted
-                    }
-                    parse(lg, order, body, now, out);
-                    return out;
+            jobs.add(pool.submit(new Callable<Batch>() {
+                @Override public Batch call() throws Exception {
+                    return fetch(lg, order, now, range, days);
                 }
             }));
         }
-        for (Future<List<Match>> job : jobs) {
+        for (Future<Batch> job : jobs) {
             try {
-                r.matches.addAll(job.get());
+                Batch b = job.get();
+                r.matches.addAll(b.matches);
+                r.seen += b.seen;
             } catch (Throwable t) {
                 r.failed++;
                 if (r.error.isEmpty()) r.error = describe(t);
@@ -186,11 +191,52 @@ final class Sports {
         return r;
     }
 
-    private static void parse(League lg, int order, String body, long now, List<Match> out) throws Exception {
+    /**
+     * One league: ask for yesterday-to-tomorrow in one request; if that is refused, ask day by day;
+     * if that fails too, ask for the feed's default slate. Only gives up when all three fail.
+     */
+    private static Batch fetch(League lg, int order, long now, String range, String[] days) throws Exception {
+        String url = API + lg.path + "/scoreboard";
+        Batch b = new Batch();
+        Set<String> ids = new HashSet<>();
+        Exception last = null;
+        boolean ok = false;
+        try {
+            parse(lg, order, Http.get(url + "?dates=" + range + "&limit=100"), now, b, ids);
+            ok = true;
+        } catch (Exception e) {
+            last = e;
+        }
+        if (!ok) {
+            for (String d : days) {
+                try {
+                    parse(lg, order, Http.get(url + "?dates=" + d + "&limit=100"), now, b, ids);
+                    ok = true;
+                } catch (Exception e) {
+                    last = e;
+                }
+            }
+        }
+        if (!ok) {
+            try {
+                parse(lg, order, Http.get(url), now, b, ids);
+                ok = true;
+            } catch (Exception e) {
+                last = e;
+            }
+        }
+        if (!ok) throw last;
+        return b;
+    }
+
+    private static void parse(League lg, int order, String body, long now, Batch batch, Set<String> ids) throws Exception {
         JSONArray events = new JSONObject(body).optJSONArray("events");
         if (events == null) return;
         for (int i = 0; i < events.length(); i++) {
             JSONObject ev = events.getJSONObject(i);
+            String id = ev.optString("id");
+            if (!ids.add(id)) continue;                                           // already seen in another request
+            batch.seen++;
             JSONObject status = ev.optJSONObject("status");
             JSONObject type = status == null ? null : status.optJSONObject("type");
             String state = type == null ? "pre" : type.optString("state", "pre");
@@ -213,7 +259,7 @@ final class Sports {
             if (home == null || away == null) continue;
 
             Match m = new Match();
-            m.id = ev.optString("id");
+            m.id = id;
             m.sport = lg.sport;
             m.leagueName = lg.name;
             m.leagueAbbr = lg.abbr;
@@ -227,11 +273,12 @@ final class Sports {
             if (venue != null) m.venue = venue.optString("fullName", "");
             JSONArray bc = comp.optJSONArray("broadcasts");
             if (bc != null && bc.length() > 0) {
-                JSONArray names = bc.getJSONObject(0).optJSONArray("names");
+                JSONObject first = bc.optJSONObject(0);
+                JSONArray names = first == null ? null : first.optJSONArray("names");
                 if (names != null && names.length() > 0) m.broadcast = names.optString(0, "");
             }
             if (!"in".equals(state)) { m.homeScore = ""; m.awayScore = ""; }
-            out.add(m);
+            batch.matches.add(m);
         }
     }
 
@@ -244,15 +291,41 @@ final class Sports {
     private static void fill(Match m, JSONObject c, boolean isHome) {
         JSONObject team = c.optJSONObject("team");
         String nm = "", ab = "", logo = "";
+        int colour = 0;
         if (team != null) {
             nm = team.optString("displayName", team.optString("shortDisplayName", ""));
             ab = team.optString("abbreviation", "");
             logo = team.optString("logo", "");
+            colour = pickColour(parseHex(team.optString("color", "")), parseHex(team.optString("alternateColor", "")));
         }
         if (TextUtils.isEmpty(ab) && nm.length() >= 3) ab = nm.substring(0, 3).toUpperCase(Locale.ROOT);
         String score = c.optString("score", "");
-        if (isHome) { m.homeName = nm; m.homeAbbr = ab; m.homeLogo = logo; m.homeScore = score; }
-        else { m.awayName = nm; m.awayAbbr = ab; m.awayLogo = logo; m.awayScore = score; }
+        if (isHome) { m.homeName = nm; m.homeAbbr = ab; m.homeLogo = logo; m.homeScore = score; m.homeColor = colour; }
+        else { m.awayName = nm; m.awayAbbr = ab; m.awayLogo = logo; m.awayScore = score; m.awayColor = colour; }
+    }
+
+    /** "dc052d" -> opaque colour, or 0 if it isn't six hex digits. */
+    private static int parseHex(String hex) {
+        if (hex == null) return 0;
+        hex = hex.trim();
+        if (hex.startsWith("#")) hex = hex.substring(1);
+        if (hex.length() != 6) return 0;
+        try {
+            return 0xFF000000 | Integer.parseInt(hex, 16);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static float luma(int c) {
+        return (0.299f * ((c >> 16) & 255) + 0.587f * ((c >> 8) & 255) + 0.114f * (c & 255)) / 255f;
+    }
+
+    /** The team colour, or its alternate if the main one is too dark to show up on a dark wall. */
+    private static int pickColour(int main, int alt) {
+        if (main == 0) return alt;
+        if (luma(main) < 0.12f && alt != 0 && luma(alt) >= 0.12f) return alt;
+        return main;
     }
 
     private static long parseDate(String s) {
