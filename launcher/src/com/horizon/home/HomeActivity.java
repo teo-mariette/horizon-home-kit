@@ -813,7 +813,8 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
             heroLabel.setText(label);
             heroLabel.setTextColor(V.accent());
             boolean sportsHero = key instanceof String && ((String) key).startsWith("sports:");
-            heroTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, V.dpf(sportsHero ? 36 : 44));
+            heroTitle.setMaxLines(sportsHero ? 1 : 2);
+            heroTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, V.dpf(sportsHero ? fitSportsTitle(title) : 44));
             if (sportsHero) { heroLine.setSingleLine(false); heroLine.setMaxLines(2); heroLine.setEllipsize(TextUtils.TruncateAt.END); }
             else V.ellipsize(heroLine);
             heroTitle.setText(title);
@@ -861,6 +862,17 @@ public class HomeActivity extends Activity implements SharedPreferences.OnShared
                 });
             }, first ? 0 : 420);
         }
+    }
+
+    /** The biggest title size (36 down to 22) at which "Team v Team" fits on one line, so it never wraps and pushes the lines under it out of view. */
+    private float fitSportsTitle(String title) {
+        android.text.TextPaint p = new android.text.TextPaint(heroTitle.getPaint());
+        float max = V.dp(515);
+        for (float s = 36; s > 22; s -= 1) {
+            p.setTextSize(V.dpf(s));
+            if (p.measureText(title) <= max) return s;
+        }
+        return 22;
     }
 
     private void setAccent(Integer raw) {
